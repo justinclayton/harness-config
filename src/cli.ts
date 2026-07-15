@@ -379,7 +379,7 @@ ${pc.bold("Commands:")}
   rm      Remove components declared in manifest
 
 ${pc.bold("Options:")}
-  --harness <name>          Target harness (repeatable: claude, opencode, copilot, pi, all)
+  --harness <name>          Target harness (repeatable: claude, opencode, copilot, pi, bob, all)
   --global, -g              Write to global (home directory) configs instead of project
   --yes, -y                 Skip confirmation prompts (CI-friendly)
   --skip-keychain-check     Skip keychain secret validation

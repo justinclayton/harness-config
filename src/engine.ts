@@ -2,11 +2,12 @@ import { basename } from "node:path";
 import type { NormalizedManifest, HarnessName, HarnessConfig, FileMapping } from "./manifest/schema.ts";
 import { getHarness, type Scope } from "./harnesses/index.ts";
 import { addMcps, removeMcps } from "./components/mcps.ts";
-import { addAgent, removeAgent } from "./components/agents.ts";
-import { addSkill, removeSkill } from "./components/skills.ts";
-import { addFile, removeFile } from "./components/files.ts";
-import { generateWrappers, removeWrappers } from "./keychain/wrappers.ts";
+import { addAgent, removeAgent, resolveAgentContent } from "./components/agents.ts";
+import { addSkill, preflightBobSkill, removeSkill } from "./components/skills.ts";
+import { addFile, componentDestination, removeFile } from "./components/files.ts";
+import { generateWrappers, getWrapperPath } from "./keychain/wrappers.ts";
 import { needsKeychainWrapper } from "./keychain/resolve.ts";
+import { buildBobMode } from "./components/bob-modes.ts";
 
 export interface EngineOptions {
   /** Target harnesses (subset filter). If empty, uses all from manifest. */
@@ -61,6 +62,38 @@ export async function executeAdd(
 
   // Source paths resolve relative to manifest location; output relative to cwd
   const sourceDir = manifest.baseDir ?? options.cwd;
+
+  // Validate every harness translation before writing any config or wrapper.
+  for (const harnessName of targetHarnesses) {
+    const adapter = getHarness(harnessName);
+    for (const [name, def] of Object.entries(manifest.mcps)) {
+      adapter.translateMcp(
+        name,
+        def,
+        needsKeychainWrapper(def) ? getWrapperPath(name, def) : undefined,
+      );
+    }
+    if (adapter.name === "bob") {
+      const config = manifest.harnesses.get(harnessName);
+      const skillPaths = [...manifest.skills, ...(config?.skills ?? [])];
+      for (const skillPath of skillPaths) await preflightBobSkill(skillPath, sourceDir);
+
+      const effectiveSlugs = new Set<string>();
+      const agents = [
+        ...(manifest.agents ?? []).map((agent) => ({ source: agent.source, overrides: agent.overrides.get(harnessName) })),
+        ...(config?.agents ?? []).map((source) => ({ source, overrides: undefined })),
+      ];
+      for (const agent of agents) {
+        const mode = buildBobMode(
+          await resolveAgentContent(agent.source, sourceDir),
+          agent.source,
+          agent.overrides,
+        );
+        if (effectiveSlugs.has(mode.slug)) throw new Error(`Duplicate IBM Bob mode slug: ${mode.slug}`);
+        effectiveSlugs.add(mode.slug);
+      }
+    }
+  }
 
   // Generate wrappers for servers that need keychain resolution
   const wrapperPaths = await generateWrappers(manifest.mcps);
@@ -195,7 +228,7 @@ export async function executeAdd(
         for (const rulePath of harnessConfig.rules) {
           const mapping: FileMapping = {
             source: rulePath,
-            dest: `rules/${basename(rulePath)}`,
+            dest: componentDestination(adapter, "rules", rulePath),
           };
           const fileResult = await addFile(adapter, mapping, options.scope, sourceDir, options.cwd);
           const fileItem: ItemResult = {
@@ -214,7 +247,7 @@ export async function executeAdd(
         for (const cmdPath of harnessConfig.commands) {
           const mapping: FileMapping = {
             source: cmdPath,
-            dest: `commands/${basename(cmdPath)}`,
+            dest: componentDestination(adapter, "commands", cmdPath),
           };
           const fileResult = await addFile(adapter, mapping, options.scope, sourceDir, options.cwd);
           const fileItem: ItemResult = {
@@ -245,6 +278,7 @@ export async function executeRm(
 ): Promise<EngineResult> {
   const { harnesses: targetHarnesses, warnings } = resolveTargetHarnesses(manifest, options.harnesses);
   const results: HarnessResult[] = [];
+  const sourceDir = manifest.baseDir ?? options.cwd;
 
   for (const harnessName of targetHarnesses) {
     const adapter = getHarness(harnessName);
@@ -272,7 +306,7 @@ export async function executeRm(
 
     // --- Skills ---
     for (const skillPath of manifest.skills) {
-      const skillResult = await removeSkill(adapter, basename(skillPath), options.scope, options.cwd);
+      const skillResult = await removeSkill(adapter, skillPath, options.scope, options.cwd, sourceDir);
       if ("removed" in skillResult) {
         result.skills.push({ name: basename(skillPath), path: skillResult.removed, unchanged: false });
         if (options.onProgress) {
@@ -289,7 +323,14 @@ export async function executeRm(
     // --- Universal Agents ---
     for (const agent of manifest.agents ?? []) {
       const agentName = basename(agent.source);
-      const agentResult = await removeAgent(adapter, agentName, options.scope, options.cwd);
+      const agentResult = await removeAgent(
+        adapter,
+        agentName,
+        options.scope,
+        options.cwd,
+        undefined,
+        agent.overrides.get(harnessName),
+      );
       if ("removed" in agentResult) {
         result.agents.push({ name: agentName, path: agentResult.removed, unchanged: false });
         if (options.onProgress) {
@@ -326,7 +367,7 @@ export async function executeRm(
 
       if (harnessConfig.skills) {
         for (const skillPath of harnessConfig.skills) {
-          const skillResult = await removeSkill(adapter, basename(skillPath), options.scope, options.cwd);
+          const skillResult = await removeSkill(adapter, skillPath, options.scope, options.cwd, sourceDir);
           if ("removed" in skillResult) {
             result.skills.push({ name: basename(skillPath), path: skillResult.removed, unchanged: false });
             if (options.onProgress) {
@@ -348,7 +389,7 @@ export async function executeRm(
       }
       if (harnessConfig.rules) {
         for (const rulePath of harnessConfig.rules) {
-          const mapping: FileMapping = { source: rulePath, dest: `rules/${basename(rulePath)}` };
+          const mapping: FileMapping = { source: rulePath, dest: componentDestination(adapter, "rules", rulePath) };
           const fileResult = await removeFile(adapter, mapping, options.scope, options.cwd);
           if ("removed" in fileResult) {
             result.files.push({ name: mapping.dest, path: fileResult.removed, unchanged: false });
@@ -360,7 +401,7 @@ export async function executeRm(
       }
       if (harnessConfig.commands) {
         for (const cmdPath of harnessConfig.commands) {
-          const mapping: FileMapping = { source: cmdPath, dest: `commands/${basename(cmdPath)}` };
+          const mapping: FileMapping = { source: cmdPath, dest: componentDestination(adapter, "commands", cmdPath) };
           const fileResult = await removeFile(adapter, mapping, options.scope, options.cwd);
           if ("removed" in fileResult) {
             result.files.push({ name: mapping.dest, path: fileResult.removed, unchanged: false });
@@ -373,13 +414,6 @@ export async function executeRm(
     }
 
     results.push(result);
-  }
-
-  // Remove keychain wrappers
-  const mcpNames = Object.keys(manifest.mcps);
-  const serversWithWrappers = mcpNames.filter((name) => needsKeychainWrapper(manifest.mcps[name]));
-  if (serversWithWrappers.length > 0) {
-    await removeWrappers(serversWithWrappers);
   }
 
   return { results, warnings };

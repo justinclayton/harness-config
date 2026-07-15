@@ -189,6 +189,18 @@ describe("buildComponentTreeOptions", () => {
     expect(options["Claude Code > Files"][0].value).toBe("file:claude:config/settings.json");
     expect(options["Claude Code > Files"][0].label).toBe("config/settings.json");
   });
+
+  it("preserves workspace-root file mappings through filtering", () => {
+    const manifest = makeManifest({
+      harnesses: new Map([
+        ["bob", { files: [{ source: "./AGENTS.md", dest: "AGENTS.md", root: "workspace" }] }],
+      ]),
+    });
+    const filtered = filterManifest(manifest, ["file:bob:AGENTS.md"]);
+    expect(filtered.harnesses.get("bob")?.files).toEqual([
+      { source: "./AGENTS.md", dest: "AGENTS.md", root: "workspace" },
+    ]);
+  });
 });
 
 describe("countManifestComponents", () => {

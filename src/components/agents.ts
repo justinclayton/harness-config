@@ -6,19 +6,20 @@ import { rm } from "node:fs/promises";
 import { isUrl, fetchFileContent } from "../util/fetch.ts";
 import { isContentUnchanged } from "../util/json.ts";
 import { mergeAgentOverrides } from "../util/frontmatter.ts";
+import { buildBobMode, deriveBobModeSlug, removeBobMode, upsertBobMode } from "./bob-modes.ts";
 
 /**
  * Agent frontmatter field support by harness.
  */
 const FIELD_SUPPORT: Record<string, Record<HarnessName, boolean>> = {
-  name: { claude: true, opencode: true, copilot: true, pi: true },
-  description: { claude: true, opencode: true, copilot: true, pi: true },
-  model: { claude: true, opencode: true, copilot: false, pi: false },
-  temperature: { claude: true, opencode: true, copilot: false, pi: false },
-  mode: { claude: false, opencode: true, copilot: false, pi: false },
-  color: { claude: false, opencode: true, copilot: false, pi: false },
-  tools: { claude: true, opencode: true, copilot: true, pi: false },
-  permission: { claude: false, opencode: true, copilot: false, pi: false },
+  name: { claude: true, opencode: true, copilot: true, pi: true, bob: false },
+  description: { claude: true, opencode: true, copilot: true, pi: true, bob: false },
+  model: { claude: true, opencode: true, copilot: false, pi: false, bob: false },
+  temperature: { claude: true, opencode: true, copilot: false, pi: false, bob: false },
+  mode: { claude: false, opencode: true, copilot: false, pi: false, bob: false },
+  color: { claude: false, opencode: true, copilot: false, pi: false, bob: false },
+  tools: { claude: true, opencode: true, copilot: true, pi: false, bob: false },
+  permission: { claude: false, opencode: true, copilot: false, pi: false, bob: false },
 };
 
 /**
@@ -165,41 +166,46 @@ export async function addAgent(
   overrides?: Record<string, unknown>,
 ): Promise<{ installed: string; unchanged?: boolean } | { skipped: string; reason: string }> {
   const agentDir = adapter.agentDir(scope);
-  if (!agentDir) {
+  if (!agentDir && !adapter.agentConfigPath) {
     return { skipped: agentPath, reason: `${adapter.displayName} does not support agents` };
   }
 
-  // Resolve the agent content — from URL or local path
-  let content: string;
-  if (isUrl(agentPath)) {
-    content = await fetchFileContent(agentPath);
-  } else if (isUrl(sourceDir)) {
-    // Relative path against a URL base → construct full URL
-    const fullUrl = `${sourceDir}/${agentPath.replace(/^\.\//,  "")}`.replace(/\/tree\//, "/blob/");
-    content = await fetchFileContent(fullUrl);
-  } else {
-    const absoluteAgentPath = resolve(sourceDir, agentPath);
-    content = await readFile(absoluteAgentPath, "utf-8");
+  const content = await resolveAgentContent(agentPath, sourceDir);
+
+  if (adapter.name === "bob") {
+    return upsertBobMode(adapter, buildBobMode(content, agentPath, overrides), scope, destCwd);
   }
 
+  let transformedContent = content;
   // Apply frontmatter overrides if provided
   if (overrides && Object.keys(overrides).length > 0) {
-    content = mergeAgentOverrides(content, overrides);
+    transformedContent = mergeAgentOverrides(transformedContent, overrides);
   }
 
   const filename = basename(agentPath);
-  const destDir = resolve(destCwd, agentDir);
+  const destDir = resolve(destCwd, agentDir!);
   const destPath = join(destDir, filename);
 
   // Skip write if content is identical (idempotent)
-  if (await isContentUnchanged(destPath, content)) {
+  if (await isContentUnchanged(destPath, transformedContent)) {
     return { installed: destPath, unchanged: true };
   }
 
   await mkdir(destDir, { recursive: true });
-  await writeFile(destPath, content, "utf-8");
+  await writeFile(destPath, transformedContent, "utf-8");
 
   return { installed: destPath };
+}
+
+export async function resolveAgentContent(agentPath: string, sourceDir: string): Promise<string> {
+  if (isUrl(agentPath)) {
+    return fetchFileContent(agentPath);
+  } else if (isUrl(sourceDir)) {
+    // Relative path against a URL base → construct full URL
+    const fullUrl = `${sourceDir}/${agentPath.replace(/^\.\//,  "")}`.replace(/\/tree\//, "/blob/");
+    return fetchFileContent(fullUrl);
+  }
+  return readFile(resolve(sourceDir, agentPath), "utf-8");
 }
 
 /**
@@ -210,8 +216,16 @@ export async function removeAgent(
   agentName: string,
   scope: Scope,
   cwd: string,
+  sourceContent?: string,
+  overrides?: Record<string, unknown>,
 ): Promise<{ removed: string } | { skipped: string; reason: string }> {
   const agentDir = adapter.agentDir(scope);
+  if (adapter.name === "bob") {
+    const slug = sourceContent
+      ? buildBobMode(sourceContent, agentName, overrides).slug
+      : deriveBobModeSlug(agentName, overrides);
+    return removeBobMode(adapter, slug, scope, cwd);
+  }
   if (!agentDir) {
     return { skipped: agentName, reason: `${adapter.displayName} does not support agents` };
   }

@@ -3,11 +3,14 @@ import { stat, readFile, readdir } from "node:fs/promises";
 import type { NormalizedManifest, HarnessName, FileMapping } from "./manifest/schema.ts";
 import { getHarness, isHarnessDetected, type Scope } from "./harnesses/index.ts";
 import { readJsonFile } from "./util/json.ts";
-import { toKebabCase, deriveSkillName } from "./components/skills.ts";
+import { resolveSkillSource, toKebabCase, validateBobSkill } from "./components/skills.ts";
 import { isUrl } from "./util/fetch.ts";
 import { needsKeychainWrapper } from "./keychain/resolve.ts";
 import { mergeAgentOverrides } from "./util/frontmatter.ts";
 import { getWrapperPath } from "./keychain/wrappers.ts";
+import { buildBobMode, deriveBobModeSlug, readBobModes } from "./components/bob-modes.ts";
+import { resolveAgentContent } from "./components/agents.ts";
+import { componentDestination, resolveSafeDestination } from "./components/files.ts";
 
 export type PlanAction = "add" | "remove" | "update" | "noop";
 
@@ -70,7 +73,7 @@ export async function buildPlan(
           let action: PlanAction = "add";
           if (isPresent) {
             const def = manifest.mcps[name];
-            const wrapperPath = needsKeychainWrapper(def) ? getWrapperPath(name) : undefined;
+             const wrapperPath = needsKeychainWrapper(def) ? getWrapperPath(name, def) : undefined;
             const desired = adapter.translateMcp(name, def, wrapperPath);
             action = deepEqual(existingServers[name], desired) ? "noop" : "update";
           }
@@ -95,6 +98,34 @@ export async function buildPlan(
     for (const agent of manifest.agents ?? []) {
       const agentDir = adapter.agentDir(scope);
       const agentPath = agent.source;
+      if (adapter.name === "bob") {
+        const { modes } = await readBobModes(adapter, scope, cwd);
+        if (command === "rm") {
+          const slug = deriveBobModeSlug(agentPath, agent.overrides.get(harnessName));
+          const existing = modes.find((candidate) => candidate.slug === slug);
+          items.push({
+            type: "agent",
+            name: slug,
+            destination: `${adapter.agentConfigPath!(scope)}#${slug}`,
+            action: existing ? "remove" : "noop",
+            reason: existing ? undefined : "not found",
+          });
+          continue;
+        }
+        const content = await resolveAgentContent(agentPath, sourceDir);
+        const mode = buildBobMode(content, agentPath, agent.overrides.get(harnessName));
+        const existing = modes.find((candidate) => candidate.slug === mode.slug);
+        const action = !existing ? "add" : deepEqual(existing, mode) ? "noop" : "update";
+        items.push({
+          type: "agent",
+          name: mode.slug,
+          destination: `${adapter.agentConfigPath!(scope)}#${mode.slug}`,
+          action,
+          reason: action === "noop" ? "unchanged" : undefined,
+          overrideKeys: Object.keys(agent.overrides.get(harnessName) ?? {}).filter((key) => agent.overrides.get(harnessName)?.[key] !== null),
+        });
+        continue;
+      }
       if (!agentDir) {
         items.push({
           type: "agent",
@@ -164,6 +195,33 @@ export async function buildPlan(
       if (harnessConfig.agents) {
         const agentDir = adapter.agentDir(scope);
         for (const agentPath of harnessConfig.agents) {
+          if (adapter.name === "bob") {
+            const { modes } = await readBobModes(adapter, scope, cwd);
+            if (command === "rm") {
+              const slug = deriveBobModeSlug(agentPath);
+              const existing = modes.find((candidate) => candidate.slug === slug);
+              items.push({
+                type: "agent",
+                name: slug,
+                destination: `${adapter.agentConfigPath!(scope)}#${slug}`,
+                action: existing ? "remove" : "noop",
+                reason: existing ? undefined : "not found",
+              });
+              continue;
+            }
+            const content = await resolveAgentContent(agentPath, sourceDir);
+            const mode = buildBobMode(content, agentPath);
+            const existing = modes.find((candidate) => candidate.slug === mode.slug);
+            const action = !existing ? "add" : deepEqual(existing, mode) ? "noop" : "update";
+            items.push({
+              type: "agent",
+              name: mode.slug,
+              destination: `${adapter.agentConfigPath!(scope)}#${mode.slug}`,
+              action,
+              reason: action === "noop" ? "unchanged" : undefined,
+            });
+            continue;
+          }
           if (!agentDir) {
             items.push({
               type: "agent",
@@ -221,8 +279,13 @@ export async function buildPlan(
       // Files
       if (harnessConfig.files) {
         for (const fileMapping of harnessConfig.files) {
-          const destPath = resolve(cwd, adapter.configRoot(scope), fileMapping.dest);
-          const destination = join(adapter.configRoot(scope), fileMapping.dest);
+          const root = fileMapping.root === "workspace"
+            ? resolve(cwd)
+            : resolve(cwd, adapter.configRoot(scope));
+          const destPath = resolveSafeDestination(root, fileMapping.dest);
+          const destination = fileMapping.root === "workspace"
+            ? fileMapping.dest
+            : join(adapter.configRoot(scope), fileMapping.dest);
           const isPresent = await fileExists(destPath);
 
           if (command === "rm") {
@@ -256,7 +319,7 @@ export async function buildPlan(
       // Rules
       if (harnessConfig.rules) {
         for (const rulePath of harnessConfig.rules) {
-          const dest = `rules/${basename(rulePath)}`;
+          const dest = componentDestination(adapter, "rules", rulePath);
           const destPath = resolve(cwd, adapter.configRoot(scope), dest);
           const destination = join(adapter.configRoot(scope), dest);
           const isPresent = await fileExists(destPath);
@@ -292,7 +355,7 @@ export async function buildPlan(
       // Commands
       if (harnessConfig.commands) {
         for (const cmdPath of harnessConfig.commands) {
-          const dest = `commands/${basename(cmdPath)}`;
+          const dest = componentDestination(adapter, "commands", cmdPath);
           const destPath = resolve(cwd, adapter.configRoot(scope), dest);
           const destination = join(adapter.configRoot(scope), dest);
           const isPresent = await fileExists(destPath);
@@ -348,20 +411,21 @@ async function planSkillItem(
   sourceDir: string,
   cwd: string,
 ): Promise<PlanItem> {
-  let skillName: string;
-
-  // Derive the installed name (same logic as addSkill/removeSkill)
-  if (isUrl(skillPath) || isUrl(sourceDir)) {
-    // For URLs, fall back to kebab-cased path basename
-    skillName = toKebabCase(basename(skillPath));
-  } else {
-    const absoluteSkillPath = resolve(sourceDir, skillPath);
-    try {
-      skillName = await deriveSkillName(absoluteSkillPath, skillPath);
-    } catch {
-      skillName = toKebabCase(basename(skillPath));
-    }
+  if (command === "rm" && adapter.name === "bob") {
+    const skillName = toKebabCase(basename(skillPath));
+    if (!skillName) throw new Error(`Skill "${skillPath}" does not produce a valid directory name`);
+    const destination = join(adapter.skillDir(scope), skillName);
+    const isPresent = await fileExists(resolve(cwd, destination));
+    return {
+      type: "skill",
+      name: skillName,
+      destination,
+      action: isPresent ? "remove" : "noop",
+      reason: isPresent ? undefined : "not found",
+    };
   }
+  const { absoluteSkillPath, skillName } = await resolveSkillSource(skillPath, sourceDir);
+  if (adapter.name === "bob") await validateBobSkill(absoluteSkillPath, skillPath);
 
   const destDir = resolve(cwd, adapter.skillDir(scope));
   const destPath = join(destDir, skillName);
@@ -379,7 +443,6 @@ async function planSkillItem(
   } else {
     let action: PlanAction = "add";
     if (isPresent && !isUrl(skillPath) && !isUrl(sourceDir)) {
-      const absoluteSkillPath = resolve(sourceDir, skillPath);
       const unchanged = await dirContentsMatch(absoluteSkillPath, destPath);
       action = unchanged ? "noop" : "update";
     } else if (isPresent) {
