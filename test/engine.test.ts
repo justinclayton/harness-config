@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeAdd, executeRm } from "../src/engine.ts";
@@ -221,6 +221,150 @@ You are a software architect.`;
 
       const skillMd = await readFile(join(tmpDir, ".claude", "skills", "my-skill", "SKILL.md"), "utf-8");
       expect(skillMd).toBe("# My Skill");
+    });
+
+    it("validates and exactly synchronizes Bob skills", async () => {
+      const source = join(tmpDir, "source", "code-review");
+      const destination = join(tmpDir, "dest");
+      await mkdir(join(source, "references"), { recursive: true });
+      await writeFile(join(source, "SKILL.md"), "---\nname: code-review\ndescription: Review code\n---\nInstructions");
+      await writeFile(join(source, "references", "old.md"), "old");
+
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", null]]),
+        skills: ["./code-review"],
+        baseDir: join(tmpDir, "source"),
+      });
+      await executeAdd(manifest, { scope: "project", cwd: destination });
+
+      await rm(join(source, "references", "old.md"));
+      await writeFile(join(source, "references", "new.md"), "new");
+      await executeAdd(manifest, { scope: "project", cwd: destination });
+
+      await expect(access(join(destination, ".bob", "skills", "code-review", "references", "old.md"))).rejects.toThrow();
+      expect(await readFile(join(destination, ".bob", "skills", "code-review", "references", "new.md"), "utf-8")).toBe("new");
+
+      await executeRm(manifest, { scope: "project", cwd: destination });
+      await expect(access(join(destination, ".bob", "skills", "code-review"))).rejects.toThrow();
+    });
+
+    it("rejects Bob skills without required metadata", async () => {
+      const source = join(tmpDir, "invalid-skill");
+      await mkdir(source, { recursive: true });
+      await writeFile(join(source, "SKILL.md"), "---\nname: invalid\n---\nBody");
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", null]]),
+        skills: ["./invalid-skill"],
+        baseDir: tmpDir,
+      });
+      await expect(executeAdd(manifest, { scope: "project", cwd: tmpDir })).rejects.toThrow(/name and description/);
+    });
+
+    it("rejects Bob skill names that do not match their folder", async () => {
+      const source = join(tmpDir, "skill-folder");
+      await mkdir(source, { recursive: true });
+      await writeFile(join(source, "SKILL.md"), "---\nname: another-name\ndescription: Description\n---\nBody");
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", null]]),
+        skills: ["./skill-folder"],
+        baseDir: tmpDir,
+      });
+      await expect(executeAdd(manifest, { scope: "project", cwd: tmpDir })).rejects.toThrow(/must match its folder/);
+    });
+  });
+
+  describe("IBM Bob modes and files", () => {
+    it("merges, updates, and removes modes by slug", async () => {
+      await mkdir(join(tmpDir, "agents"), { recursive: true });
+      await mkdir(join(tmpDir, ".bob"), { recursive: true });
+      await writeFile(join(tmpDir, ".bob", "custom_modes.yaml"), `customModes:\n  - slug: existing\n    name: Existing\n    roleDefinition: Keep me\n    groups: [read]\n`);
+      await writeFile(join(tmpDir, "agents", "reviewer.md"), `---\nname: Reviewer\ndescription: Reviews changes\ntools: [Read, Grep]\nwhenToUse: Use for reviews\n---\nReview code carefully.`);
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", { agents: ["./agents/reviewer.md"] }]]),
+        baseDir: tmpDir,
+      });
+
+      await executeAdd(manifest, { scope: "project", cwd: tmpDir });
+      let modes = await readFile(join(tmpDir, ".bob", "custom_modes.yaml"), "utf-8");
+      expect(modes).toContain("slug: existing");
+      expect(modes).toContain("slug: reviewer");
+      expect(modes).toContain("roleDefinition: Review code carefully.");
+      expect(modes).toContain("- read");
+
+      await writeFile(join(tmpDir, "agents", "reviewer.md"), `---\nname: Reviewer\ndescription: Reviews changes\ngroups: [read, skill]\n---\nUpdated role.`);
+      await executeAdd(manifest, { scope: "project", cwd: tmpDir });
+      modes = await readFile(join(tmpDir, ".bob", "custom_modes.yaml"), "utf-8");
+      expect(modes).toContain("roleDefinition: Updated role.");
+      expect(modes.match(/slug: reviewer/g)).toHaveLength(1);
+
+      await executeRm(manifest, { scope: "project", cwd: tmpDir });
+      modes = await readFile(join(tmpDir, ".bob", "custom_modes.yaml"), "utf-8");
+      expect(modes).toContain("slug: existing");
+      expect(modes).not.toContain("slug: reviewer");
+    });
+
+    it("preserves nested rules and commands and supports workspace AGENTS.md", async () => {
+      await mkdir(join(tmpDir, "assets", "rules", "security"), { recursive: true });
+      await mkdir(join(tmpDir, "assets", "commands", "release"), { recursive: true });
+      await writeFile(join(tmpDir, "assets", "rules", "security", "review.md"), "rule");
+      await writeFile(join(tmpDir, "assets", "commands", "release", "deploy.md"), "command");
+      await writeFile(join(tmpDir, "assets", "AGENTS.md"), "context");
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", {
+          rules: ["./assets/rules/security/review.md"],
+          commands: ["./assets/commands/release/deploy.md"],
+          files: [{ source: "./assets/AGENTS.md", dest: "AGENTS.md", root: "workspace" }],
+        }]]),
+        baseDir: tmpDir,
+      });
+
+      await executeAdd(manifest, { scope: "project", cwd: tmpDir });
+      expect(await readFile(join(tmpDir, ".bob", "rules", "security", "review.md"), "utf-8")).toBe("rule");
+      expect(await readFile(join(tmpDir, ".bob", "commands", "release", "deploy.md"), "utf-8")).toBe("command");
+      expect(await readFile(join(tmpDir, "AGENTS.md"), "utf-8")).toBe("context");
+    });
+
+    it("rejects file destinations outside their root", async () => {
+      await writeFile(join(tmpDir, "source.txt"), "content");
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", { files: [{ source: "./source.txt", dest: "../escape.txt" }] }]]),
+        baseDir: tmpDir,
+      });
+      await expect(executeAdd(manifest, { scope: "project", cwd: tmpDir })).rejects.toThrow(/escapes/);
+    });
+
+    it("rejects root-equivalent file destinations", async () => {
+      await writeFile(join(tmpDir, "source.txt"), "content");
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", { files: [{ source: "./source.txt", dest: "." }] }]]),
+        baseDir: tmpDir,
+      });
+      await expect(executeAdd(manifest, { scope: "project", cwd: tmpDir })).rejects.toThrow(/configured root/);
+    });
+
+    it("uses filenames as stable default mode slugs", async () => {
+      await mkdir(join(tmpDir, "agents"), { recursive: true });
+      await writeFile(join(tmpDir, "agents", "reviewer.md"), "---\nname: Friendly Reviewer\n---\nReview code.");
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", { agents: ["./agents/reviewer.md"] }]]),
+        baseDir: tmpDir,
+      });
+      await executeAdd(manifest, { scope: "project", cwd: tmpDir });
+      expect(await readFile(join(tmpDir, ".bob", "custom_modes.yaml"), "utf-8")).toContain("slug: reviewer");
+    });
+
+    it("preflights invalid Bob skills before writing MCP config", async () => {
+      const source = join(tmpDir, "bad-skill");
+      await mkdir(source, { recursive: true });
+      await writeFile(join(source, "SKILL.md"), "---\nname: bad\n---\nBody");
+      const manifest = makeManifest({
+        harnesses: new Map([["bob", null]]),
+        mcps: { local: { stdio: "node server.js" } },
+        skills: ["./bad-skill"],
+        baseDir: tmpDir,
+      });
+      await expect(executeAdd(manifest, { scope: "project", cwd: tmpDir })).rejects.toThrow();
+      await expect(access(join(tmpDir, ".bob", "mcp.json"))).rejects.toThrow();
     });
   });
 

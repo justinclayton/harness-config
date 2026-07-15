@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { parseArgs, buildHarnessPickerOptions, computeCiHarnessTargets } from "../src/cli.ts";
 import { clearDetectionCache, seedDetectionCache } from "../src/harnesses/index.ts";
 import { harnessNames } from "../src/manifest/schema.ts";
+import { bob } from "../src/harnesses/bob.ts";
 
 describe("CLI argument parsing", () => {
   function argv(...args: string[]): string[] {
@@ -109,11 +110,12 @@ describe("Harness picker options", () => {
 
   function mockDetection(installedBinaries: string[]) {
     // Seed cache so that listed binaries are "found" and all others are not
-    const allBinaries = ["claude", "pi", "opencode", "copilot", "code"];
+    const allBinaries = ["claude", "pi", "opencode", "copilot", "code", "bobide"];
     const entries: Record<string, boolean> = {};
     for (const bin of allBinaries) {
       entries[bin] = installedBinaries.includes(bin);
     }
+    for (const path of bob.detectionPaths ?? []) entries[`path:${path}`] = false;
     seedDetectionCache(entries);
   }
 

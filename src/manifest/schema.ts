@@ -14,20 +14,26 @@ const envItemSchema = z.union([
 
 const mcpBaseSchema = z.object({
   env: z.array(envItemSchema).optional(),
+  alwaysAllow: z.array(z.string()).optional(),
+  disabled: z.boolean().optional(),
 });
 
 const mcpStdioSchema = mcpBaseSchema.extend({
   stdio: z.union([z.string(), z.array(z.string())]),
+  cwd: z.string().optional(),
   url: z.undefined().optional(),
   auth: z.undefined().optional(),
   headers: z.undefined().optional(),
+  transport: z.undefined().optional(),
 });
 
 const mcpHttpSchema = mcpBaseSchema.extend({
   url: z.string().url(),
   auth: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  transport: z.enum(["streamable-http", "sse"]).default("streamable-http"),
   stdio: z.undefined().optional(),
+  cwd: z.undefined().optional(),
 });
 
 export const mcpDefSchema = z.union([mcpStdioSchema, mcpHttpSchema]);
@@ -39,6 +45,7 @@ export const harnessNames = [
   "opencode",
   "copilot",
   "pi",
+  "bob",
 ] as const;
 
 export type HarnessName = (typeof harnessNames)[number];
@@ -50,6 +57,7 @@ export const harnessNameSchema = z.enum(harnessNames);
 const fileMappingSchema = z.object({
   source: z.string(),
   dest: z.string(),
+  root: z.enum(["config", "workspace"]).optional(),
 });
 
 // --- Harness-specific config ---

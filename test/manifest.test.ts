@@ -83,6 +83,25 @@ mcps:
     const mcp = result.mcps.github;
     expect("url" in mcp && mcp.url).toBe("https://api.githubcopilot.com/mcp/");
     expect("auth" in mcp && mcp.auth).toBe("env:GH_TOKEN");
+    expect("transport" in mcp && mcp.transport).toBe("streamable-http");
+  });
+
+  it("parses Bob-compatible MCP options", () => {
+    const result = parseManifestYaml(`
+name: test
+harnesses: [bob]
+mcps:
+  local:
+    stdio: node server.js
+    cwd: ./tools
+    alwaysAllow: [search]
+    disabled: false
+  legacy:
+    url: https://example.com/events
+    transport: sse
+`);
+    expect(result.mcps.local).toMatchObject({ cwd: "./tools", alwaysAllow: ["search"], disabled: false });
+    expect(result.mcps.legacy).toMatchObject({ transport: "sse" });
   });
 
   it("parses HTTP MCP with headers", () => {
@@ -157,6 +176,21 @@ harnesses:
     const result = parseManifestYaml(yaml);
     const claudeConfig = result.harnesses.get("claude");
     expect(claudeConfig!.files).toEqual([{ source: "./custom/file.txt", dest: "settings/file.txt" }]);
+  });
+
+  it("parses workspace-root file destinations", () => {
+    const result = parseManifestYaml(`
+name: test
+harnesses:
+  bob:
+    files:
+      - source: ./AGENTS.md
+        dest: AGENTS.md
+        root: workspace
+`);
+    expect(result.harnesses.get("bob")?.files).toEqual([
+      { source: "./AGENTS.md", dest: "AGENTS.md", root: "workspace" },
+    ]);
   });
 
   it("rejects manifest without name", () => {

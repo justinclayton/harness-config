@@ -30,6 +30,9 @@ export interface HarnessAdapter {
   /** Directory for agent .md files (null if unsupported) */
   agentDir(scope: Scope): string | null;
 
+  /** Collection file for harnesses that store agents in one config file */
+  agentConfigPath?(scope: Scope): string;
+
   /** Directory for skill directories */
   skillDir(scope: Scope): string;
 
@@ -53,4 +56,7 @@ export interface HarnessAdapter {
 
   /** Binary names to check via `which` — if ANY is found, the harness is considered installed */
   readonly binaryNames: string[];
+
+  /** Absolute installation markers used when the harness has no PATH binary */
+  readonly detectionPaths?: string[];
 }
