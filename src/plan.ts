@@ -2,7 +2,7 @@ import { resolve, basename, join } from "node:path";
 import { stat, readFile, readdir } from "node:fs/promises";
 import type { NormalizedManifest, HarnessName, FileMapping } from "./manifest/schema.ts";
 import { getHarness, isHarnessDetected, type Scope } from "./harnesses/index.ts";
-import { readJsonFile } from "./util/json.ts";
+import { readMcpConfig } from "./components/mcps.ts";
 import { resolveSkillSource, toKebabCase, validateBobSkill } from "./components/skills.ts";
 import { isUrl } from "./util/fetch.ts";
 import { needsKeychainWrapper } from "./keychain/resolve.ts";
@@ -53,7 +53,7 @@ export async function buildPlan(
     const mcpNames = Object.keys(manifest.mcps);
     if (mcpNames.length > 0) {
       const configPath = resolve(cwd, adapter.mcpConfigPath(scope));
-      const existing = await readJsonFile(configPath);
+      const existing = await readMcpConfig(adapter, configPath);
       const existingServers = (existing[adapter.mcpJsonKey] as Record<string, unknown>) ?? {};
 
       for (const name of mcpNames) {

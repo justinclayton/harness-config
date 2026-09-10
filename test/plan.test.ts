@@ -100,6 +100,27 @@ describe("plan override hints", () => {
     expect(agentItem!.overrideKeys).toEqual(["model"]);
   });
 
+  it("reads an existing TOML-format MCP config (Codex) instead of mis-parsing it as JSON", async () => {
+    await mkdir(join(tmpDir, ".codex"), { recursive: true });
+    await writeFile(
+      join(tmpDir, ".codex", "config.toml"),
+      '[mcp_servers.fetch]\ncommand = "npx"\nargs = [ "-y", "@anthropic/mcp-fetch" ]\n',
+    );
+
+    const manifest = makeManifest({
+      harnesses: new Map([["codex", null]]),
+      mcps: { fetch: { stdio: "npx -y @anthropic/mcp-fetch" } },
+    });
+
+    const plans = await buildPlan(manifest, "add", ["codex"], "project", tmpDir);
+
+    expect(plans).toHaveLength(1);
+    const mcpItem = plans[0].items.find(i => i.type === "mcp" && i.name === "fetch");
+    expect(mcpItem).toBeDefined();
+    expect(mcpItem!.action).toBe("noop");
+    expect(mcpItem!.reason).toBe("unchanged");
+  });
+
   it("does not include overrideKeys on rm command", async () => {
     await mkdir(join(tmpDir, ".claude", "agents"), { recursive: true });
     await writeFile(join(tmpDir, ".claude", "agents", "architect.md"), "---\nname: Architect\n---\nBody.");

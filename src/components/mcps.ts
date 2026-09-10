@@ -4,7 +4,13 @@ import type { McpDef, NormalizedManifest } from "../manifest/schema.ts";
 import { readJsonFile, writeJsonFile, mergeMcpEntries, removeMcpEntries } from "../util/json.ts";
 import { readTomlFile, writeTomlFile } from "../util/toml.ts";
 
-async function readMcpConfig(
+/**
+ * Read a harness's MCP config file, dispatching to the right parser for its
+ * declared format. Any code that inspects an MCP config file — not just the
+ * add/remove functions below — must go through this rather than reaching for
+ * readJsonFile directly, or it'll silently mis-parse TOML-based harnesses.
+ */
+export async function readMcpConfig(
   adapter: HarnessAdapter,
   configPath: string,
 ): Promise<Record<string, unknown>> {
