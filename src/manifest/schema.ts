@@ -44,6 +44,7 @@ export const harnessNames = [
   "claude",
   "opencode",
   "copilot",
+  "codex",
   "pi",
   "bob",
 ] as const;

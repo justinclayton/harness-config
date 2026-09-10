@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { claude } from "../src/harnesses/claude.ts";
 import { opencode } from "../src/harnesses/opencode.ts";
 import { copilot } from "../src/harnesses/copilot.ts";
+import { codex } from "../src/harnesses/codex.ts";
 import { pi } from "../src/harnesses/pi.ts";
 import { bob } from "../src/harnesses/bob.ts";
 import { isHarnessDetected, isBinaryInstalled, clearDetectionCache } from "../src/harnesses/index.ts";
@@ -175,6 +176,73 @@ describe("harness MCP translation", () => {
       });
     });
   });
+
+  describe("Codex CLI", () => {
+    it("translates stdio MCP with command/args", () => {
+      const result = codex.translateMcp("fetch", { stdio: stdioMcp.stdio });
+      expect(result).toEqual({
+        command: "npx",
+        args: ["-y", "@anthropic/mcp-fetch"],
+      });
+    });
+
+    it("whitelists bare passthrough env vars via env_vars", () => {
+      const result = codex.translateMcp("fetch", stdioMcp);
+      expect(result).toEqual({
+        command: "npx",
+        args: ["-y", "@anthropic/mcp-fetch"],
+        env_vars: ["HTTP_PROXY"],
+      });
+    });
+
+    it("translates HTTP MCP auth into bearer_token_env_var", () => {
+      const result = codex.translateMcp("github", httpMcp);
+      expect(result).toEqual({
+        url: "https://api.githubcopilot.com/mcp/",
+        bearer_token_env_var: "GH_TOKEN",
+      });
+    });
+
+    it("translates env-backed headers into env_http_headers", () => {
+      const result = codex.translateMcp("github", httpMcpWithHeaders);
+      expect(result).toEqual({
+        url: "https://api.example.com/mcp/",
+        bearer_token_env_var: "TOKEN",
+        env_http_headers: { "X-Tenant-ID": "MY_TENANT" },
+      });
+    });
+
+    it("keeps a literal auth token as a literal header", () => {
+      const result = codex.translateMcp("github", {
+        url: "https://api.example.com/mcp/",
+        auth: "literal-token",
+      });
+      expect(result).toEqual({
+        url: "https://api.example.com/mcp/",
+        http_headers: { Authorization: "Bearer literal-token" },
+      });
+    });
+
+    it("rejects keychain-backed auth for the HTTP transport", () => {
+      expect(() =>
+        codex.translateMcp("secret", {
+          url: "https://api.example.com/mcp/",
+          auth: "keychain:my-token",
+        }),
+      ).toThrow(/no subprocess to inject secrets into/);
+    });
+
+    it("uses wrapper path when provided, without extra env wiring", () => {
+      const result = codex.translateMcp("fetch", {
+        stdio: stdioMcp.stdio,
+        env: [{ TOKEN: "keychain:token" }],
+      }, "/home/user/.harness-config/wrappers/fetch.sh");
+      expect(result).toEqual({
+        command: "/home/user/.harness-config/wrappers/fetch.sh",
+        args: [],
+      });
+    });
+  });
 });
 
 describe("harness config paths", () => {
@@ -224,6 +292,25 @@ describe("harness config paths", () => {
   it("Bob skill dir is .bob/skills", () => {
     expect(bob.skillDir("project")).toContain(".bob");
     expect(bob.skillDir("project")).toContain("skills");
+  });
+
+  it("Codex global MCP path is ~/.codex/config.toml", () => {
+    expect(codex.mcpConfigPath("global")).toMatch(/\.codex\/config\.toml$/);
+    expect(codex.mcpConfigFormat).toBe("toml");
+  });
+
+  it("Codex project MCP path is .codex/config.toml", () => {
+    expect(codex.mcpConfigPath("project")).toBe(".codex/config.toml");
+  });
+
+  it("Codex has no agent support", () => {
+    expect(codex.agentDir("project")).toBeNull();
+    expect(codex.supportsAgents).toBe(false);
+  });
+
+  it("Codex skill dir is ~/.agents/skills, shared with other harnesses", () => {
+    expect(codex.skillDir("global")).toMatch(/\.agents\/skills$/);
+    expect(codex.skillDir("project")).toBe(".agents/skills");
   });
 });
 

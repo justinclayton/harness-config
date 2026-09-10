@@ -98,6 +98,45 @@ describe("engine integration", () => {
 
       expect(first).toBe(second);
     });
+
+    it("writes Codex's TOML config and preserves unrelated settings", async () => {
+      // Simulate a real-world config.toml with settings unrelated to MCP,
+      // including a dotted, quoted table name (as Codex's hook state uses).
+      await mkdir(join(tmpDir, ".codex"), { recursive: true });
+      await writeFile(
+        join(tmpDir, ".codex", "config.toml"),
+        [
+          'model = "gpt-5.6-sol"',
+          "",
+          '[mcp_servers.existing]',
+          'command = "old-cmd"',
+          "",
+          '[hooks.state."/Users/example/.codex/hooks.json:pre_tool_use:0:0"]',
+          'trusted_hash = "sha256:abc123"',
+          "",
+        ].join("\n"),
+      );
+
+      const manifest = makeManifest({
+        harnesses: new Map([["codex", null]]),
+        mcps: { fetch: { stdio: "npx -y @anthropic/mcp-fetch", env: ["HTTP_PROXY"] } },
+      });
+
+      await executeAdd(manifest, { scope: "project", cwd: tmpDir });
+
+      const { parse } = await import("smol-toml");
+      const config = parse(await readFile(join(tmpDir, ".codex", "config.toml"), "utf-8")) as any;
+
+      expect(config.model).toBe("gpt-5.6-sol");
+      expect(config.mcp_servers.existing).toEqual({ command: "old-cmd" });
+      expect(config.mcp_servers.fetch).toEqual({
+        command: "npx",
+        args: ["-y", "@anthropic/mcp-fetch"],
+        env_vars: ["HTTP_PROXY"],
+      });
+      expect(config.hooks.state["/Users/example/.codex/hooks.json:pre_tool_use:0:0"].trusted_hash)
+        .toBe("sha256:abc123");
+    });
   });
 
   describe("rm MCPs", () => {

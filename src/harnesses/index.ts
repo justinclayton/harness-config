@@ -6,6 +6,7 @@ import type { HarnessAdapter } from "./types.ts";
 import { claude } from "./claude.ts";
 import { opencode } from "./opencode.ts";
 import { copilot } from "./copilot.ts";
+import { codex } from "./codex.ts";
 import { pi } from "./pi.ts";
 import { bob } from "./bob.ts";
 
@@ -16,6 +17,7 @@ const registry: Record<HarnessName, HarnessAdapter> = {
   claude,
   opencode,
   copilot,
+  codex,
   pi,
   bob,
 };

@@ -12,14 +12,14 @@ import { buildBobMode, deriveBobModeSlug, removeBobMode, upsertBobMode } from ".
  * Agent frontmatter field support by harness.
  */
 const FIELD_SUPPORT: Record<string, Record<HarnessName, boolean>> = {
-  name: { claude: true, opencode: true, copilot: true, pi: true, bob: false },
-  description: { claude: true, opencode: true, copilot: true, pi: true, bob: false },
-  model: { claude: true, opencode: true, copilot: false, pi: false, bob: false },
-  temperature: { claude: true, opencode: true, copilot: false, pi: false, bob: false },
-  mode: { claude: false, opencode: true, copilot: false, pi: false, bob: false },
-  color: { claude: false, opencode: true, copilot: false, pi: false, bob: false },
-  tools: { claude: true, opencode: true, copilot: true, pi: false, bob: false },
-  permission: { claude: false, opencode: true, copilot: false, pi: false, bob: false },
+  name: { claude: true, opencode: true, copilot: true, codex: false, pi: true, bob: false },
+  description: { claude: true, opencode: true, copilot: true, codex: false, pi: true, bob: false },
+  model: { claude: true, opencode: true, copilot: false, codex: false, pi: false, bob: false },
+  temperature: { claude: true, opencode: true, copilot: false, codex: false, pi: false, bob: false },
+  mode: { claude: false, opencode: true, copilot: false, codex: false, pi: false, bob: false },
+  color: { claude: false, opencode: true, copilot: false, codex: false, pi: false, bob: false },
+  tools: { claude: true, opencode: true, copilot: true, codex: false, pi: false, bob: false },
+  permission: { claude: false, opencode: true, copilot: false, codex: false, pi: false, bob: false },
 };
 
 /**

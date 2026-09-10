@@ -41,8 +41,11 @@ export interface HarnessAdapter {
 
   // --- MCP translation ---
 
-  /** Top-level key in the MCP JSON file (e.g., "mcpServers" or "mcp") */
+  /** Top-level key in the MCP config file (e.g., "mcpServers" or "mcp_servers") */
   readonly mcpJsonKey: string;
+
+  /** Serialization format for the MCP config file. Defaults to "json" when omitted. */
+  readonly mcpConfigFormat?: "json" | "toml";
 
   /** Translate a manifest MCP definition to harness-native JSON entry */
   translateMcp(name: string, def: McpDef, wrapperPath?: string): McpJsonEntry;

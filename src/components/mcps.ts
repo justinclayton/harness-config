@@ -2,6 +2,26 @@ import { resolve } from "node:path";
 import type { HarnessAdapter, Scope } from "../harnesses/types.ts";
 import type { McpDef, NormalizedManifest } from "../manifest/schema.ts";
 import { readJsonFile, writeJsonFile, mergeMcpEntries, removeMcpEntries } from "../util/json.ts";
+import { readTomlFile, writeTomlFile } from "../util/toml.ts";
+
+async function readMcpConfig(
+  adapter: HarnessAdapter,
+  configPath: string,
+): Promise<Record<string, unknown>> {
+  return adapter.mcpConfigFormat === "toml"
+    ? readTomlFile(configPath)
+    : readJsonFile(configPath);
+}
+
+async function writeMcpConfig(
+  adapter: HarnessAdapter,
+  configPath: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  return adapter.mcpConfigFormat === "toml"
+    ? writeTomlFile(configPath, data)
+    : writeJsonFile(configPath, data);
+}
 
 export interface McpAddResult {
   harness: string;
@@ -36,9 +56,9 @@ export async function addMcps(
   }
 
   // Read existing, merge, write
-  const existing = await readJsonFile(configPath);
+  const existing = await readMcpConfig(adapter, configPath);
   const merged = mergeMcpEntries(existing, adapter.mcpJsonKey, entries);
-  await writeJsonFile(configPath, merged);
+  await writeMcpConfig(adapter, configPath, merged);
 
   return {
     harness: adapter.displayName,
@@ -58,9 +78,9 @@ export async function removeMcps(
 ): Promise<McpRmResult> {
   const configPath = resolve(cwd, adapter.mcpConfigPath(scope));
 
-  const existing = await readJsonFile(configPath);
+  const existing = await readMcpConfig(adapter, configPath);
   const updated = removeMcpEntries(existing, adapter.mcpJsonKey, names);
-  await writeJsonFile(configPath, updated);
+  await writeMcpConfig(adapter, configPath, updated);
 
   return {
     harness: adapter.displayName,

@@ -9,6 +9,7 @@
 - Claude Code
 - GitHub Copilot (VS Code, copilot CLI, etc.)
 - OpenCode
+- Codex CLI
 - Pi
 - IBM Bob IDE
 
@@ -76,6 +77,37 @@ mcps:
 skills:
   - ./skills/terraform-planning
 ```
+
+### Codex CLI
+
+Codex's global MCP config lives at `~/.codex/config.toml`, and it's TOML —
+every other harness this tool supports uses JSON. Writing it round-trips the
+whole file through parse + stringify, so unrelated settings (model, hooks
+state, etc.) are preserved, but comments and key ordering are not.
+
+Codex has no custom subagent or mode concept, so `agents` is unsupported
+(`agentDir` returns `null`, same as Bob). Skills install to
+`~/.agents/skills/<name>/SKILL.md` — this is a Codex-specific convention,
+separate from Codex's own `~/.codex/skills/` directory, which is reserved for
+its built-in skills.
+
+Stdio MCP servers whitelist passthrough env vars by name via `env_vars`,
+rather than embedding a `${env:VAR}` placeholder inline like the JSON-based
+harnesses:
+
+```toml
+[mcp_servers.fetch]
+command = "npx"
+args = ["-y", "@anthropic/mcp-fetch"]
+env_vars = ["HTTP_PROXY"]
+```
+
+HTTP/streamable MCP servers authenticate via `bearer_token_env_var` and
+source headers from `env_http_headers`, both by naming an environment
+variable rather than embedding its value. Because Codex's HTTP transport has
+no subprocess to inject secrets into, keychain-backed auth or headers aren't
+supported for it — use a literal value, `env:VAR`, or a stdio MCP server
+instead.
 
 ### IBM Bob IDE
 
@@ -183,7 +215,7 @@ harness-config rm [manifest-path] [options]
 
 | Flag | Description |
 |------|-------------|
-| `--harness <name>` | Target harness (repeatable: claude, opencode, copilot, pi, bob) |
+| `--harness <name>` | Target harness (repeatable: claude, opencode, copilot, codex, pi, bob) |
 | `--global`, `-g` | Write to global configs instead of project |
 | `--yes`, `-y` | Skip confirmation prompts |
 | `--help`, `-h` | Show help |
