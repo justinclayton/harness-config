@@ -24,8 +24,8 @@ export const pi: HarnessAdapter = {
 
   agentDir(scope: Scope): string {
     return scope === "global"
-      ? join(homedir(), ".agents", "skills")
-      : ".agents/skills";
+      ? join(homedir(), ".pi", "agent", "agents")
+      : join(".pi", "agents");
   },
 
   skillDir(scope: Scope): string {

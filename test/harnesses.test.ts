@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { claude } from "../src/harnesses/claude.ts";
 import { opencode } from "../src/harnesses/opencode.ts";
 import { copilot } from "../src/harnesses/copilot.ts";
@@ -196,8 +198,15 @@ describe("harness config paths", () => {
   });
 
   it("Pi supports agents", () => {
-    expect(pi.agentDir("project")).toBe(".agents/skills");
     expect(pi.supportsAgents).toBe(true);
+  });
+
+  it("Pi project agent dir is .pi/agents", () => {
+    expect(pi.agentDir("project")).toBe(join(".pi", "agents"));
+  });
+
+  it("Pi global agent dir is ~/.pi/agent/agents", () => {
+    expect(pi.agentDir("global")).toBe(join(homedir(), ".pi", "agent", "agents"));
   });
 
   it("Pi skill dir is .pi/skills", () => {
